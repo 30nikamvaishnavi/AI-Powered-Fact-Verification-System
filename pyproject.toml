@@ -1,0 +1,33 @@
+[project]
+name = "ai-fact-verification-system"
+version = "1.0.0"
+description = "AI-Powered Fact Verification System using Streamlit, Pydantic, BeautifulSoup4, scikit-learn, and SQLite."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-v"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["src", "tests", "pages", "app.py"]
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle errors
+  "W",   # pycodestyle warnings
+  "F",   # pyflakes
+  "I",   # isort
+  "B",   # flake8-bugbear
+  "UP",  # pyupgrade
+  "SIM", # flake8-simplify
+]
+ignore = [
+  "E501", # allow slightly longer human-readable UI strings when needed
+]
+
+[tool.ruff.lint.per-file-ignores]
+"pages/*.py" = ["N999"]

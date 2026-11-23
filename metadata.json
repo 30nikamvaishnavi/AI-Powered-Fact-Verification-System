@@ -1,0 +1,8 @@
+{
+  "name": "AI-Powered Fact Verification System",
+  "description": "A modular Python & Streamlit fact verification system that checks factual claims against multiple sources, compares evidence, detects disagreements, and generates exportable verification reports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
