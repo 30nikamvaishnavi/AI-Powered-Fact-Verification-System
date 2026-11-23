@@ -68,9 +68,15 @@ else:
 
     for rec in records:
         with st.container(border=True):
-            c_badge, c_claim, c_meta, c_open, c_del = st.columns([1.1, 3.8, 2.0, 0.9, 0.8])
+            c_badge, c_claim, c_meta, c_open, c_del = st.columns([1.4, 3.5, 2.0, 0.9, 0.8])
             with c_badge:
-                st.markdown(label_badge_html(rec.label), unsafe_allow_html=True)
+                st.markdown(
+                    label_badge_html(
+                        rec.label,
+                        is_preliminary=("Preliminary" in rec.search_mode),
+                    ),
+                    unsafe_allow_html=True,
+                )
                 if rec.disagreement_flagged:
                     st.caption("Conflict flagged")
             with c_claim:

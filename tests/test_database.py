@@ -7,13 +7,21 @@ from pathlib import Path
 
 import pytest
 
-from fact_checker.database import DatabaseError, VerificationDatabase
-from fact_checker.models import ManualEvidenceInput, VerificationLabel
+from fact_checker.database import (
+    DEFAULT_DATABASE_PATH,
+    DatabaseError,
+    VerificationDatabase,
+)
+from fact_checker.models import ManualEvidenceInput, VerificationLabel, VerificationMode
 from fact_checker.report_generator import run_verification_pipeline
 
 
+def test_default_database_path_matches_env_example() -> None:
+    assert DEFAULT_DATABASE_PATH == "data/fact_verification.db"
+
+
 def test_database_saves_lists_filters_retrieves_and_deletes(tmp_path: Path) -> None:
-    db_file = tmp_path / "history.db"
+    db_file = tmp_path / "fact_verification.db"
     db = VerificationDatabase(db_file)
     db.init_db()
     assert db_file.exists()
@@ -27,7 +35,9 @@ def test_database_saves_lists_filters_retrieves_and_deletes(tmp_path: Path) -> N
     ]
     session_id, mode, reports = run_verification_pipeline(
         "Water boils at 100 degrees Celsius at standard pressure.",
+        verification_mode=VerificationMode.MANUAL_SOURCE,
         manual_entries=manual,
+        use_gemini=False,
     )
     db.save_session_and_reports(
         session_id=session_id,

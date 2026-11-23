@@ -33,6 +33,13 @@ class RetrievalStatus(StrEnum):
     MANUAL = "Manual Entry"
 
 
+class VerificationMode(StrEnum):
+    """Supported verification workflows."""
+
+    MANUAL_SOURCE = "Manual Source Verification"
+    PRELIMINARY_KNOWLEDGE = "Gemini Knowledge-Based Preliminary Analysis"
+
+
 class ParsedClaim(BaseModel):
     """Validated and normalized factual claim ready for verification."""
 
@@ -44,19 +51,8 @@ class ParsedClaim(BaseModel):
     has_negation: bool = False
 
 
-class SearchResult(BaseModel):
-    """Standardized search result returned by any configured SearchProvider."""
-
-    title: str
-    url: str
-    publisher: str
-    publication_date: str | None = None
-    snippet: str = ""
-    provider: str = "unknown"
-
-
 class ManualEvidenceInput(BaseModel):
-    """User-supplied evidence source when running in Manual Evidence Mode."""
+    """User-supplied evidence source in Manual Source Verification mode."""
 
     title: str = Field(..., min_length=1, max_length=300)
     url: str = Field(..., min_length=1, max_length=2000)
@@ -153,6 +149,47 @@ class ComparisonSummary(BaseModel):
     disagreement_summary: str = ""
 
 
+class GeminiClaimSplitResponse(BaseModel):
+    """Structured Gemini output for breaking long prose into individual claims."""
+
+    claims: list[str] = Field(default_factory=list)
+
+
+class GeminiSourceAssessment(BaseModel):
+    """Structured Gemini evaluation of a single user-supplied/retrieved source."""
+
+    source_id: str
+    evidence_excerpt: str = ""
+    position: EvidencePosition
+    rationale: str
+
+
+class GeminiEvidenceVerificationResponse(BaseModel):
+    """Structured Gemini output for Manual Source Verification."""
+
+    label: VerificationLabel
+    confidence_score: float = Field(ge=0.0, le=1.0)
+    confidence_explanation: str
+    short_explanation: str
+    source_assessments: list[GeminiSourceAssessment] = Field(default_factory=list)
+    unsupported_statements: list[str] = Field(default_factory=list)
+    unresolved_questions: list[str] = Field(default_factory=list)
+    disagreement_summary: str = ""
+
+
+class GeminiPreliminaryAnalysisResponse(BaseModel):
+    """Structured Gemini output for Knowledge-Based Preliminary Analysis."""
+
+    label: VerificationLabel
+    confidence_score: float = Field(ge=0.0, le=1.0)
+    confidence_explanation: str
+    short_explanation: str
+    supporting_points: list[str] = Field(default_factory=list)
+    contradicting_points: list[str] = Field(default_factory=list)
+    unsupported_statements: list[str] = Field(default_factory=list)
+    unresolved_questions: list[str] = Field(default_factory=list)
+
+
 class VerificationReport(BaseModel):
     """Complete structured verification report for a single factual claim."""
 
@@ -163,16 +200,21 @@ class VerificationReport(BaseModel):
     confidence_score: float = Field(ge=0.0, le=1.0)
     confidence_explanation: str
     short_explanation: str
+    verification_mode: VerificationMode = VerificationMode.MANUAL_SOURCE
+    is_preliminary_ai_only: bool = False
     supporting_evidence: list[EvidenceSnippet] = Field(default_factory=list)
     contradicting_evidence: list[EvidenceSnippet] = Field(default_factory=list)
     unclear_evidence: list[EvidenceSnippet] = Field(default_factory=list)
+    unsupported_statements: list[str] = Field(default_factory=list)
+    preliminary_points_supporting: list[str] = Field(default_factory=list)
+    preliminary_points_contradicting: list[str] = Field(default_factory=list)
     unresolved_questions: list[str] = Field(default_factory=list)
     source_comparison: ComparisonSummary
     sources: list[RetrievedSource] = Field(default_factory=list)
     retrieval_timestamp: str
     limitations: list[str] = Field(default_factory=list)
     disagreement_flagged: bool = False
-    search_mode: str = "Manual Evidence Mode"
+    search_mode: str = "Manual Source Verification"
 
 
 class VerificationHistorySummary(BaseModel):

@@ -7,17 +7,16 @@ from pathlib import Path
 
 import streamlit as st
 
-# Ensure `src/` is importable when running `streamlit run app.py` directly
 _SRC_DIR = Path(__file__).resolve().parent / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
 from fact_checker.ui_helpers import (  # noqa: E402
+    gemini_status_label,
     get_database,
     init_app_environment,
     inject_custom_css,
     label_badge_html,
-    provider_status_label,
     safe_db_stats,
 )
 
@@ -32,23 +31,22 @@ inject_custom_css()
 
 st.title("AI-Powered Fact Verification System")
 st.markdown(
-    "Verify factual claims against retrieved or user-supplied sources, detect conflicting "
-    "evidence across publishers, and generate transparent, exportable verification reports."
+    "Analyze factual claims using **Google Gemini** (`google-genai`), compare multiple "
+    "user-supplied sources side by side, flag conflicting evidence, and export structured reports."
 )
 
-api_configured, provider_label = provider_status_label()
+gemini_ok, gemini_label = gemini_status_label()
 stats, db_error = safe_db_stats()
 
 st.divider()
 
-# System status & metrics row
-col_mode, col_total, col_sup, col_con, col_unv = st.columns([2, 1, 1, 1, 1])
+col_mode, col_total, col_sup, col_con, col_unv = st.columns([2.2, 1, 1, 1, 1])
 with col_mode:
-    st.markdown("**Source Discovery Mode**")
-    if api_configured:
-        st.success(provider_label)
+    st.markdown("**AI Provider Status**")
+    if gemini_ok:
+        st.success(gemini_label)
     else:
-        st.info(provider_label)
+        st.warning(gemini_label)
 with col_total:
     st.metric("Total Verified", stats["total"] if stats else 0)
 with col_sup:
@@ -63,27 +61,21 @@ if db_error:
 
 st.divider()
 
-st.subheader("How Verification Works")
-step1, step2, step3, step4 = st.columns(4)
-with step1:
-    st.markdown("#### 1. Parse Claims")
-    st.write(
-        "Validates non-empty claims, splits multi-claim inputs, and extracts keywords and numbers."
+st.subheader("Two Verification Modes")
+m1, m2 = st.columns(2)
+with m1:
+    st.info(
+        "**Mode A — Manual Source Verification**\n\n"
+        "Provide source URLs and excerpts (or safely fetch accessible public webpages). "
+        "Gemini compares the submitted evidence strictly against your claim without inventing "
+        "sources or citations."
     )
-with step2:
-    st.markdown("#### 2. Gather Sources")
-    st.write(
-        "Queries a configured Search API or uses Manual Evidence Mode with safe HTML extraction."
-    )
-with step3:
-    st.markdown("#### 3. Analyze Evidence")
-    st.write(
-        "Scores topical relevance with TF-IDF + keyword overlap, then evaluates support vs. conflict."
-    )
-with step4:
-    st.markdown("#### 4. Report & Compare")
-    st.write(
-        "Flags disagreements, discloses access errors, stores history in SQLite, and exports JSON/CSV/MD."
+with m2:
+    st.warning(
+        "**Mode B — Gemini Knowledge-Based Preliminary Analysis**\n\n"
+        "Uses Gemini's existing model knowledge for an initial screening when you have not "
+        "gathered sources yet. Clearly labeled as AI-generated preliminary analysis—not live "
+        "fact verification."
     )
 
 st.divider()
@@ -104,18 +96,15 @@ st.subheader("Verdict Definitions")
 d1, d2, d3 = st.columns(3)
 with d1:
     st.success(
-        "**SUPPORTED**: Reliable retrieved evidence aligns with the claim and no contradicting "
-        "evidence was found."
+        "**SUPPORTED**: Provided evidence supports the claim with no contradicting evidence."
     )
 with d2:
     st.error(
-        "**CONTRADICTED**: Reliable retrieved evidence directly conflicts with the claim "
-        "(e.g., negation, antonym, or numeric/date mismatch)."
+        "**CONTRADICTED**: Provided evidence directly conflicts with the claim."
     )
 with d3:
     st.warning(
-        "**UNVERIFIED**: Evidence is insufficient, inaccessible, inconclusive, or sources "
-        "directly disagree."
+        "**UNVERIFIED**: Evidence is insufficient, inconclusive, inaccessible, or sources disagree."
     )
 
 st.divider()
@@ -127,9 +116,15 @@ if not db_error:
             st.caption("No verification sessions stored yet. Open **Verify Claims** to get started.")
         else:
             for item in recent:
-                c1, c2, c3 = st.columns([1, 4, 2])
+                c1, c2, c3 = st.columns([1.4, 3.6, 2])
                 with c1:
-                    st.markdown(label_badge_html(item.label), unsafe_allow_html=True)
+                    st.markdown(
+                        label_badge_html(
+                            item.label,
+                            is_preliminary=("Preliminary" in item.search_mode),
+                        ),
+                        unsafe_allow_html=True,
+                    )
                 with c2:
                     st.write(item.claim)
                 with c3:

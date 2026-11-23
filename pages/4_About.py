@@ -1,4 +1,4 @@
-"""About & Methodology page explaining verification rules, safety, and limitations."""
+"""About & Methodology page explaining Gemini integration, verification rules, and limitations."""
 
 from __future__ import annotations
 
@@ -24,58 +24,58 @@ inject_custom_css()
 
 st.title("About & Verification Methodology")
 st.markdown(
-    "The **AI-Powered Fact Verification System** is designed to promote transparent, "
-    "evidence-backed claim checking without fabricating citations or overstating certainty."
+    "The **AI-Powered Fact Verification System** pairs **Google Gemini** (`google-genai`) with "
+    "strict Pydantic schema validation, transparent TF-IDF relevance scoring, and conservative "
+    "evidence-grounding safeguards."
+)
+
+st.subheader("Verification Modes")
+st.markdown(
+    """
+- **Mode A — Manual Source Verification**: Users supply source URLs and excerpts (or enable safe
+  public webpage extraction). Gemini compares the claim strictly against the provided evidence,
+  identifies supporting/contradicting excerpts, highlights unsupported statements, and flags
+  disagreements.
+- **Mode B — Gemini Knowledge-Based Preliminary Analysis**: Uses Gemini's internal training
+  knowledge for an initial screening when external sources have not been collected yet. Results
+  are prominently marked **AI-GENERATED PRELIMINARY ANALYSIS** and never claim that live sources
+  or URLs were checked.
+"""
 )
 
 st.subheader("Primary Verification Labels")
 st.markdown(
     """
-- **SUPPORTED**: Accessible evidence statements align with the claim's key terms, polarity, and
-  numeric/date values, with no contradicting evidence found.
-- **CONTRADICTED**: Accessible evidence directly conflicts with the claim via explicit refutation
-  cues, negation mismatch, antonym conflicts, or numeric/date discrepancies.
-- **UNVERIFIED**: Evidence is missing, inaccessible, ambiguous, or sources directly disagree.
-  When sources conflict, the system flags the disagreement instead of forcing a verdict.
+- **SUPPORTED**: Provided evidence supports the claim with no contradicting evidence found.
+- **CONTRADICTED**: Provided evidence directly conflicts with the claim.
+- **UNVERIFIED**: Evidence is insufficient, inconclusive, inaccessible, or sources disagree.
+  When sources conflict, the system flags the disagreement rather than forcing a verdict.
 """
 )
 
-st.subheader("Why Text Similarity Is Not Proof")
-st.info(
-    "A statement like 'The Earth is flat' and 'The Earth is not flat' share almost the exact same "
-    "keywords and therefore receive a high TF-IDF cosine similarity score. This system separates "
-    "**topical relevance scoring** (TF-IDF + keyword overlap) from **stance analysis** (polarity, "
-    "refutations, antonyms, and numeric checks) so similar wording never counts as automatic proof."
-)
-
-st.subheader("Source Credibility vs. Evidence Relevance")
-st.write(
-    "Publisher domains are displayed for attribution and comparison only. The system never assumes "
-    "a source is authoritative solely because of its domain name, and users are encouraged to inspect "
-    "primary references and publication dates directly."
-)
-
-st.subheader("Reliability, Privacy & Security Safeguards")
+st.subheader("Anti-Fabrication & Security Safeguards")
 st.markdown(
     """
-- **No fabricated citations**: Every excerpt, URL, and publication date comes directly from a
-  retrieved webpage, configured search API response, or user-supplied input.
-- **Respectful HTTP retrieval**: Enforces strict URL validation (blocking local/private IPs),
-  timeouts, and byte caps; HTTP 401/403/429/451 restrictions are disclosed rather than bypassed.
-- **Untrusted webpage handling**: Retrieved HTML is stripped of scripts/navigation and treated
-  strictly as passive text—never as executable code or instructions.
-- **Zero-key resilience**: Works cleanly in Manual Evidence Mode when no search API key is set,
-  and never exposes API keys in logs or UI messages.
+- **No invented citations or URLs**: Gemini is strictly prohibited from inventing URLs, dates,
+  or source excerpts. Excerpts returned in Mode A are cross-checked against actual source text.
+- **Text similarity is not proof**: Topical TF-IDF similarity ranks candidate excerpts, never
+  proving factual truth on its own.
+- **Respectful HTTP retrieval**: Blocks private/loopback IPs, enforces timeouts, strips HTML
+  scripts, treats webpage text as untrusted data, and discloses HTTP 401/403/429 blocks rather
+  than bypassing them.
+- **Secret protection**: `GEMINI_API_KEY` is read solely from environment variables (`.env`) and
+  never exposed in logs, reports, or UI fields.
 """
 )
 
 st.subheader("Known Limitations")
 st.markdown(
     """
-- Rule-based and TF-IDF stance checks may mark complex, multi-hop, or heavily paraphrased claims
-  as `UNVERIFIED` rather than risking a false positive.
-- Dynamic JavaScript-rendered websites cannot be read without a search snippet or manual text entry.
+- Gemini is not a live search engine; Mode B preliminary analyses reflect pre-training knowledge
+  and may miss recent developments or niche primary records.
+- Paywalled or JavaScript-only webpages cannot be read automatically unless you paste the
+  relevant excerpt manually in Mode A.
 - Automated verification assists human judgment and should not replace domain-expert review for
-  high-stakes medical, legal, or financial decisions.
+  high-stakes medical, legal, financial, or safety decisions.
 """
 )

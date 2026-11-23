@@ -10,6 +10,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from .database import DatabaseError, VerificationDatabase
+from .gemini_service import get_gemini_model, is_gemini_configured
 from .models import (
     ComparisonSummary,
     EvidenceSnippet,
@@ -22,7 +23,6 @@ from .report_generator import (
     export_report_markdown,
     save_report_to_exports,
 )
-from .search_provider import get_search_provider
 
 
 def init_app_environment() -> None:
@@ -47,6 +47,7 @@ def inject_custom_css() -> None:
             font-weight: 700;
             font-size: 0.85rem;
             letter-spacing: 0.04em;
+            margin-right: 0.4rem;
         }
         .fv-supported {
             background-color: #dcfce7;
@@ -63,6 +64,11 @@ def inject_custom_css() -> None:
             color: #92400e;
             border: 1px solid #fcd34d;
         }
+        .fv-prelim {
+            background-color: #e0f2fe;
+            color: #075985;
+            border: 1px solid #7dd3fc;
+        }
         .fv-card {
             border: 1px solid rgba(128, 128, 128, 0.25);
             border-radius: 10px;
@@ -70,33 +76,32 @@ def inject_custom_css() -> None:
             margin-bottom: 1rem;
             background-color: rgba(128, 128, 128, 0.04);
         }
-        .fv-muted {
-            font-size: 0.88rem;
-            opacity: 0.82;
-        }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
 
-def label_badge_html(label: VerificationLabel) -> str:
-    """Return HTML span for a verification verdict badge."""
+def label_badge_html(label: VerificationLabel, *, is_preliminary: bool = False) -> str:
+    """Return HTML span for a verification verdict badge (and optional preliminary tag)."""
     css_map = {
         VerificationLabel.SUPPORTED: "fv-supported",
         VerificationLabel.CONTRADICTED: "fv-contradicted",
         VerificationLabel.UNVERIFIED: "fv-unverified",
     }
     css_class = css_map.get(label, "fv-unverified")
-    return f'<span class="fv-badge {css_class}">{label.value}</span>'
+    badge = f'<span class="fv-badge {css_class}">{label.value}</span>'
+    if is_preliminary:
+        badge += '<span class="fv-badge fv-prelim">AI-GENERATED PRELIMINARY ANALYSIS</span>'
+    return badge
 
 
-def provider_status_label() -> tuple[bool, str]:
-    """Return (is_api_configured, human_readable_status) without exposing API keys."""
-    provider = get_search_provider()
-    if provider.is_configured():
-        return True, f"Configured ({provider.name.capitalize()} Search API)"
-    return False, "Manual Evidence Mode (No search API key configured)"
+def gemini_status_label() -> tuple[bool, str]:
+    """Return (is_configured, status_text) without exposing any API key."""
+    model = get_gemini_model()
+    if is_gemini_configured():
+        return True, f"Gemini API Configured (Model: {model})"
+    return False, f"GEMINI_API_KEY not configured in .env (Default model: {model})"
 
 
 def render_evidence_list(items: list[EvidenceSnippet], empty_message: str) -> None:
@@ -117,7 +122,7 @@ def render_evidence_list(items: list[EvidenceSnippet], empty_message: str) -> No
 def render_comparison_table(comparison: ComparisonSummary) -> None:
     """Render the multi-source comparison table and agreement/disagreement summaries."""
     if not comparison.rows:
-        st.info("No sources were available to compare for this claim.")
+        st.info("No external sources were compared for this report.")
         return
 
     df = pd.DataFrame(
@@ -164,37 +169,69 @@ def render_report_preview(report: VerificationReport, *, key_prefix: str = "rep"
     st.markdown('<div class="fv-card">', unsafe_allow_html=True)
     header_col, metric_col = st.columns([4, 1])
     with header_col:
-        st.markdown(label_badge_html(report.label), unsafe_allow_html=True)
+        st.markdown(
+            label_badge_html(report.label, is_preliminary=report.is_preliminary_ai_only),
+            unsafe_allow_html=True,
+        )
         st.markdown(f"### {report.claim}")
     with metric_col:
         st.metric("Confidence", f"{report.confidence_score:.2f}")
 
+    if report.is_preliminary_ai_only:
+        st.warning(
+            "**AI-Generated Preliminary Analysis (Not Live Source Verification):** "
+            "This assessment reflects Gemini's internal model knowledge only. No external "
+            "sources, URLs, or live webpages were checked."
+        )
+
     if report.disagreement_flagged:
         st.warning(
-            "Source Disagreement Flagged: Retrieved evidence contains conflicting statements. "
+            "Source Disagreement Flagged: Provided evidence contains conflicting statements. "
             "Review the comparison table before drawing a conclusion."
         )
 
     st.write(report.short_explanation)
     st.caption(
-        f"{report.confidence_explanation} | Retrieved (UTC): {report.retrieval_timestamp} | "
-        f"Mode: {report.search_mode}"
+        f"{report.confidence_explanation} | Timestamp (UTC): {report.retrieval_timestamp} | "
+        f"Mode: {report.verification_mode.value}"
     )
 
-    ev_col1, ev_col2 = st.columns(2)
-    with ev_col1:
-        st.markdown("#### Supporting Evidence")
-        render_evidence_list(
-            report.supporting_evidence, "No supporting evidence identified."
-        )
-    with ev_col2:
-        st.markdown("#### Contradicting Evidence")
-        render_evidence_list(
-            report.contradicting_evidence, "No contradicting evidence identified."
-        )
+    if report.is_preliminary_ai_only:
+        p1, p2 = st.columns(2)
+        with p1:
+            st.markdown("#### Preliminary Supporting Considerations")
+            if report.preliminary_points_supporting:
+                for pt in report.preliminary_points_supporting:
+                    st.markdown(f"- {pt}")
+            else:
+                st.caption("None noted.")
+        with p2:
+            st.markdown("#### Preliminary Contradicting Considerations")
+            if report.preliminary_points_contradicting:
+                for pt in report.preliminary_points_contradicting:
+                    st.markdown(f"- {pt}")
+            else:
+                st.caption("None noted.")
+    else:
+        ev_col1, ev_col2 = st.columns(2)
+        with ev_col1:
+            st.markdown("#### Supporting Evidence")
+            render_evidence_list(
+                report.supporting_evidence, "No supporting evidence identified."
+            )
+        with ev_col2:
+            st.markdown("#### Contradicting Evidence")
+            render_evidence_list(
+                report.contradicting_evidence, "No contradicting evidence identified."
+            )
 
-    with st.expander("Multiple-Source Comparison", expanded=True):
-        render_comparison_table(report.source_comparison)
+        with st.expander("Evidence Comparison Table", expanded=True):
+            render_comparison_table(report.source_comparison)
+
+    if report.unsupported_statements:
+        st.markdown("#### Unsupported or Unverified Statements")
+        for stmt in report.unsupported_statements:
+            st.markdown(f"- {stmt}")
 
     q_col, l_col = st.columns(2)
     with q_col:

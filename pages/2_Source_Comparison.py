@@ -32,8 +32,8 @@ inject_custom_css()
 
 st.title("Multiple-Source Comparison")
 st.markdown(
-    "Compare retrieved sources side-by-side to inspect where publishers agree, where they "
-    "conflict, and which URLs could not be accessed."
+    "Compare user-supplied or retrieved sources side by side to inspect where sources agree, "
+    "where they conflict, and which URLs could not be accessed."
 )
 
 selected_report: VerificationReport | None = None
@@ -52,9 +52,7 @@ if source_origin == "Active Session Results":
             "**Saved Verification History**."
         )
     else:
-        labels = [
-            f"[{r.label.value}] {r.claim[:90]}" for r in session_reports
-        ]
+        labels = [f"[{r.label.value}] {r.claim[:90]}" for r in session_reports]
         chosen_idx = st.selectbox(
             "Select a claim from the current session",
             range(len(session_reports)),
@@ -82,29 +80,41 @@ else:
 
 if selected_report is not None:
     st.divider()
-    st.markdown(label_badge_html(selected_report.label), unsafe_allow_html=True)
+    st.markdown(
+        label_badge_html(
+            selected_report.label,
+            is_preliminary=selected_report.is_preliminary_ai_only,
+        ),
+        unsafe_allow_html=True,
+    )
     st.subheader(selected_report.claim)
 
-    comp = selected_report.source_comparison
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Supports", comp.supports_count)
-    m2.metric("Contradicts", comp.contradicts_count)
-    m3.metric("Unclear", comp.unclear_count)
-    m4.metric("Inaccessible", comp.inaccessible_count)
-
-    if comp.has_disagreement:
+    if selected_report.is_preliminary_ai_only:
         st.warning(
-            "Disagreement Flagged: Sources conflict on this claim. Inspect the excerpts and "
-            "primary source links below."
+            "This report was generated in **Gemini Knowledge-Based Preliminary Analysis** mode "
+            "without external sources. Switch to **Manual Source Verification** to compare sources."
         )
+    else:
+        comp = selected_report.source_comparison
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Supports", comp.supports_count)
+        m2.metric("Contradicts", comp.contradicts_count)
+        m3.metric("Unclear", comp.unclear_count)
+        m4.metric("Inaccessible", comp.inaccessible_count)
 
-    render_comparison_table(comp)
-
-    inaccessible = [s for s in selected_report.sources if not s.usable_text]
-    if inaccessible:
-        st.subheader("Inaccessible or Restricted Sources Disclosure")
-        for src in inaccessible:
-            st.markdown(
-                f"- **{src.title}** (`{src.url}`): `{src.retrieval_status.value}` — "
-                f"{src.retrieval_error or 'No readable text available.'}"
+        if comp.has_disagreement:
+            st.warning(
+                "Disagreement Flagged: Sources conflict on this claim. Inspect the excerpts and "
+                "primary source links below."
             )
+
+        render_comparison_table(comp)
+
+        inaccessible = [s for s in selected_report.sources if not s.usable_text]
+        if inaccessible:
+            st.subheader("Inaccessible or Restricted Sources Disclosure")
+            for src in inaccessible:
+                st.markdown(
+                    f"- **{src.title}** (`{src.url}`): `{src.retrieval_status.value}` — "
+                    f"{src.retrieval_error or 'No readable text available.'}"
+                )

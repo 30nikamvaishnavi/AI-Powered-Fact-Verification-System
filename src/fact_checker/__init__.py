@@ -3,19 +3,34 @@
 from .claim_parser import ClaimValidationError, parse_claims
 from .database import DatabaseError, VerificationDatabase
 from .evidence_extractor import extract_candidate_statements
+from .gemini_service import (
+    GeminiAuthenticationError,
+    GeminiFactCheckService,
+    GeminiMissingKeyError,
+    GeminiRateLimitError,
+    GeminiResponseError,
+    GeminiServiceError,
+    GeminiTimeoutError,
+    get_gemini_model,
+    is_gemini_configured,
+)
 from .models import (
     ComparisonSummary,
     EvidencePosition,
     EvidenceSnippet,
+    GeminiClaimSplitResponse,
+    GeminiEvidenceVerificationResponse,
+    GeminiPreliminaryAnalysisResponse,
+    GeminiSourceAssessment,
     ManualEvidenceInput,
     ParsedClaim,
     RetrievalStatus,
     RetrievedSource,
     ScoredEvidence,
-    SearchResult,
     SourceComparisonRow,
     VerificationHistorySummary,
     VerificationLabel,
+    VerificationMode,
     VerificationReport,
 )
 from .relevance_analyzer import score_evidence_relevance
@@ -29,24 +44,19 @@ from .report_generator import (
     run_verification_pipeline,
     save_report_to_exports,
 )
-from .search_provider import (
-    NullSearchProvider,
-    SearchProvider,
-    SearchProviderError,
-    SerperSearchProvider,
-    TavilySearchProvider,
-    get_search_provider,
-)
 from .source_comparator import build_source_comparison
 from .source_retriever import (
     build_manual_source,
     retrieve_source_from_url,
-    retrieve_sources_from_search_results,
     validate_public_url,
 )
-from .verification_engine import verify_claim_from_evidence
+from .verification_engine import (
+    build_preliminary_verification_payload,
+    reconcile_gemini_source_assessment,
+    verify_claim_from_evidence,
+)
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 
 __all__ = [
     "ClaimValidationError",
@@ -54,24 +64,31 @@ __all__ = [
     "DatabaseError",
     "EvidencePosition",
     "EvidenceSnippet",
+    "GeminiAuthenticationError",
+    "GeminiClaimSplitResponse",
+    "GeminiEvidenceVerificationResponse",
+    "GeminiFactCheckService",
+    "GeminiMissingKeyError",
+    "GeminiPreliminaryAnalysisResponse",
+    "GeminiRateLimitError",
+    "GeminiResponseError",
+    "GeminiServiceError",
+    "GeminiSourceAssessment",
+    "GeminiTimeoutError",
     "ManualEvidenceInput",
-    "NullSearchProvider",
     "ParsedClaim",
     "RetrievalStatus",
     "RetrievedSource",
     "ScoredEvidence",
-    "SearchProvider",
-    "SearchProviderError",
-    "SearchResult",
-    "SerperSearchProvider",
     "SourceComparisonRow",
-    "TavilySearchProvider",
     "VerificationDatabase",
     "VerificationHistorySummary",
     "VerificationLabel",
+    "VerificationMode",
     "VerificationReport",
     "__version__",
     "build_manual_source",
+    "build_preliminary_verification_payload",
     "build_source_comparison",
     "export_report_csv",
     "export_report_json",
@@ -80,10 +97,11 @@ __all__ = [
     "export_reports_json",
     "extract_candidate_statements",
     "generate_verification_report",
-    "get_search_provider",
+    "get_gemini_model",
+    "is_gemini_configured",
     "parse_claims",
+    "reconcile_gemini_source_assessment",
     "retrieve_source_from_url",
-    "retrieve_sources_from_search_results",
     "run_verification_pipeline",
     "save_report_to_exports",
     "score_evidence_relevance",

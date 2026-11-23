@@ -11,9 +11,9 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from .models import ManualEvidenceInput, RetrievalStatus, RetrievedSource, SearchResult
+from .models import ManualEvidenceInput, RetrievalStatus, RetrievedSource
 
-DEFAULT_TIMEOUT_SECONDS = 8
+DEFAULT_TIMEOUT_SECONDS = 15
 MAX_RESPONSE_BYTES = 1_000_000
 MAX_STORED_TEXT_CHARS = 15_000
 USER_AGENT = "FactVerificationSystem/1.0 (+educational-research; respectful-crawler)"
@@ -31,7 +31,6 @@ def sanitize_untrusted_text(text: str) -> str:
     """Normalize whitespace and strip control characters from untrusted webpage text."""
     if not text:
         return ""
-    # Strip ASCII control chars except newline/tab
     cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", text)
     cleaned = re.sub(r"[ \t]+", " ", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
@@ -78,7 +77,6 @@ def validate_public_url(url: str) -> tuple[bool, str | None]:
         ):
             return False, "Private or reserved IP addresses are not permitted."
     except ValueError:
-        # Hostname is a domain name, not an IP literal; verify it contains a dot
         if "." not in hostname:
             return False, "URL hostname must be a valid public domain."
 
@@ -325,34 +323,6 @@ def _inaccessible_source(
     )
 
 
-def retrieve_sources_from_search_results(
-    results: list[SearchResult],
-    *,
-    timeout: int = DEFAULT_TIMEOUT_SECONDS,
-    session: requests.Session | None = None,
-) -> list[RetrievedSource]:
-    """Retrieve webpage text for each SearchResult while preserving snippets and URLs."""
-    retrieved: list[RetrievedSource] = []
-    seen_urls: set[str] = set()
-    for item in results:
-        normalized_url = item.url.strip()
-        if normalized_url in seen_urls:
-            continue
-        seen_urls.add(normalized_url)
-        retrieved.append(
-            retrieve_source_from_url(
-                normalized_url,
-                title=item.title,
-                snippet=item.snippet,
-                publication_date=item.publication_date,
-                provider=item.provider,
-                timeout=timeout,
-                session=session,
-            )
-        )
-    return retrieved
-
-
 def build_manual_source(
     entry: ManualEvidenceInput,
     *,
@@ -402,7 +372,7 @@ def build_manual_source(
             snippet="",
             retrieved_text="",
             retrieval_status=RetrievalStatus.INACCESSIBLE,
-            retrieval_error="No evidence text was provided for this manual source.",
+            retrieval_error="No evidence text was provided for this source (and webpage fetching was disabled).",
             retrieved_at=utc_now_iso(),
             is_manual=True,
             provider="manual",

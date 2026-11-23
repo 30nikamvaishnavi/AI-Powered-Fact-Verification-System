@@ -17,7 +17,7 @@ from .models import (
 )
 from .source_retriever import utc_now_iso
 
-DEFAULT_DATABASE_PATH = "data/verification_history.db"
+DEFAULT_DATABASE_PATH = "data/fact_verification.db"
 
 
 class DatabaseError(RuntimeError):

@@ -11,21 +11,26 @@ from pathlib import Path
 
 from .claim_parser import parse_claims
 from .evidence_extractor import extract_candidate_statements
+from .gemini_service import GeminiFactCheckService
 from .models import (
     ManualEvidenceInput,
     ParsedClaim,
     RetrievedSource,
+    VerificationMode,
     VerificationReport,
 )
 from .relevance_analyzer import score_evidence_relevance
-from .search_provider import NullSearchProvider, SearchProvider, SearchProviderError
 from .source_comparator import build_source_comparison
 from .source_retriever import (
+    DEFAULT_TIMEOUT_SECONDS,
     build_manual_source,
-    retrieve_sources_from_search_results,
     utc_now_iso,
 )
-from .verification_engine import verify_claim_from_evidence
+from .verification_engine import (
+    build_preliminary_verification_payload,
+    reconcile_gemini_source_assessment,
+    verify_claim_from_evidence,
+)
 
 
 def generate_verification_report(
@@ -33,12 +38,54 @@ def generate_verification_report(
     sources: list[RetrievedSource],
     *,
     session_id: str | None = None,
-    search_mode: str = "Manual Evidence Mode",
+    verification_mode: VerificationMode = VerificationMode.MANUAL_SOURCE,
+    gemini_service: GeminiFactCheckService | None = None,
+    use_gemini: bool = True,
 ) -> VerificationReport:
-    """Run extraction, relevance scoring, verification, and comparison for one claim."""
+    """Generate a structured VerificationReport for one claim under Mode A or Mode B."""
+    sess_id = session_id or f"sess-{uuid.uuid4().hex[:8]}"
+
+    if verification_mode == VerificationMode.PRELIMINARY_KNOWLEDGE:
+        service = gemini_service or GeminiFactCheckService()
+        prelim_resp = service.analyze_claim_preliminary(claim.text)
+        verdict = build_preliminary_verification_payload(claim, prelim_resp)
+        comparison = build_source_comparison(claim.text, [], {})
+        return VerificationReport(
+            report_id=f"rep-{uuid.uuid4().hex[:10]}",
+            session_id=sess_id,
+            claim=claim.text,
+            label=verdict["label"],  # type: ignore[arg-type]
+            confidence_score=verdict["confidence_score"],  # type: ignore[arg-type]
+            confidence_explanation=verdict["confidence_explanation"],  # type: ignore[arg-type]
+            short_explanation=verdict["short_explanation"],  # type: ignore[arg-type]
+            verification_mode=VerificationMode.PRELIMINARY_KNOWLEDGE,
+            is_preliminary_ai_only=True,
+            supporting_evidence=[],
+            contradicting_evidence=[],
+            unclear_evidence=[],
+            unsupported_statements=verdict["unsupported_statements"],  # type: ignore[arg-type]
+            preliminary_points_supporting=verdict["preliminary_points_supporting"],  # type: ignore[arg-type]
+            preliminary_points_contradicting=verdict["preliminary_points_contradicting"],  # type: ignore[arg-type]
+            unresolved_questions=verdict["unresolved_questions"],  # type: ignore[arg-type]
+            source_comparison=comparison,
+            sources=[],
+            retrieval_timestamp=utc_now_iso(),
+            limitations=verdict["limitations"],  # type: ignore[arg-type]
+            disagreement_flagged=bool(verdict["disagreement_flagged"]),
+            search_mode=VerificationMode.PRELIMINARY_KNOWLEDGE.value,
+        )
+
     candidates = extract_candidate_statements(sources)
     scored = score_evidence_relevance(claim, candidates)
-    verdict = verify_claim_from_evidence(claim, sources, scored)
+    accessible_sources = [s for s in sources if s.usable_text]
+
+    if use_gemini and accessible_sources:
+        service = gemini_service or GeminiFactCheckService()
+        gemini_resp = service.analyze_claim_against_sources(claim.text, sources)
+        verdict = reconcile_gemini_source_assessment(claim, sources, scored, gemini_resp)
+    else:
+        verdict = verify_claim_from_evidence(claim, sources, scored)
+
     comparison = build_source_comparison(
         claim.text,
         sources,
@@ -47,51 +94,61 @@ def generate_verification_report(
 
     return VerificationReport(
         report_id=f"rep-{uuid.uuid4().hex[:10]}",
-        session_id=session_id or f"sess-{uuid.uuid4().hex[:8]}",
+        session_id=sess_id,
         claim=claim.text,
         label=verdict["label"],  # type: ignore[arg-type]
         confidence_score=verdict["confidence_score"],  # type: ignore[arg-type]
         confidence_explanation=verdict["confidence_explanation"],  # type: ignore[arg-type]
         short_explanation=verdict["short_explanation"],  # type: ignore[arg-type]
+        verification_mode=VerificationMode.MANUAL_SOURCE,
+        is_preliminary_ai_only=False,
         supporting_evidence=verdict["supporting_evidence"],  # type: ignore[arg-type]
         contradicting_evidence=verdict["contradicting_evidence"],  # type: ignore[arg-type]
         unclear_evidence=verdict["unclear_evidence"],  # type: ignore[arg-type]
+        unsupported_statements=verdict.get("unsupported_statements", []),  # type: ignore[arg-type]
         unresolved_questions=verdict["unresolved_questions"],  # type: ignore[arg-type]
         source_comparison=comparison,
         sources=sources,
         retrieval_timestamp=utc_now_iso(),
         limitations=verdict["limitations"],  # type: ignore[arg-type]
         disagreement_flagged=bool(verdict["disagreement_flagged"]),
-        search_mode=search_mode,
+        search_mode=VerificationMode.MANUAL_SOURCE.value,
     )
 
 
 def run_verification_pipeline(
     raw_claims_text: str,
     *,
-    search_provider: SearchProvider | None = None,
+    verification_mode: VerificationMode = VerificationMode.MANUAL_SOURCE,
     manual_entries: list[ManualEvidenceInput] | None = None,
     fetch_manual_urls: bool = False,
-    max_search_results: int = 5,
-    timeout_seconds: int = 8,
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    gemini_service: GeminiFactCheckService | None = None,
+    use_gemini: bool = True,
+    use_gemini_claim_splitting: bool = False,
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> tuple[str, str, list[VerificationReport]]:
-    """Validate claims, gather sources, and generate VerificationReports for a session.
-
-    Returns:
-        Tuple of (session_id, search_mode_label, reports).
-    """
+    """Validate claims, process sources (Mode A) or preliminary AI analysis (Mode B), and return reports."""
     if progress_callback:
         progress_callback(0.1, "Validating and parsing factual claims...")
 
-    parsed_claims = parse_claims(raw_claims_text)
+    service = gemini_service or (GeminiFactCheckService(timeout_seconds=timeout_seconds) if use_gemini else None)
+
+    effective_claims_input = raw_claims_text
+    if use_gemini and use_gemini_claim_splitting and service is not None and raw_claims_text.strip():
+        if progress_callback:
+            progress_callback(0.18, "Using Gemini to decompose text into individual claims...")
+        extracted_claims = service.split_claims(raw_claims_text)
+        if extracted_claims:
+            effective_claims_input = "\n".join(extracted_claims)
+
+    parsed_claims = parse_claims(effective_claims_input)
     session_id = f"sess-{uuid.uuid4().hex[:10]}"
-    provider = search_provider or NullSearchProvider()
 
     manual_sources: list[RetrievedSource] = []
-    if manual_entries:
+    if verification_mode == VerificationMode.MANUAL_SOURCE and manual_entries:
         if progress_callback:
-            progress_callback(0.25, "Processing manually supplied evidence sources...")
+            progress_callback(0.3, "Processing submitted source URLs and evidence...")
         for entry in manual_entries:
             manual_sources.append(
                 build_manual_source(
@@ -101,58 +158,31 @@ def run_verification_pipeline(
                 )
             )
 
-    use_search = provider.is_configured()
-    search_mode = (
-        f"Search API ({provider.name}) + Manual"
-        if (use_search and manual_sources)
-        else (f"Search API ({provider.name})" if use_search else "Manual Evidence Mode")
-    )
-
     reports: list[VerificationReport] = []
     total = len(parsed_claims)
     for idx, claim in enumerate(parsed_claims, start=1):
-        claim_sources = list(manual_sources)
-        search_warning: str | None = None
-
-        if use_search:
-            if progress_callback:
-                progress_callback(
-                    0.3 + 0.4 * ((idx - 1) / max(total, 1)),
-                    f"Discovering sources for claim {idx}/{total} via {provider.name}...",
-                )
-            try:
-                results = provider.search(claim.text, max_results=max_search_results)
-                fetched = retrieve_sources_from_search_results(
-                    results, timeout=timeout_seconds
-                )
-                seen_urls = {s.url for s in claim_sources}
-                for src in fetched:
-                    if src.url not in seen_urls:
-                        claim_sources.append(src)
-                        seen_urls.add(src.url)
-            except SearchProviderError as exc:
-                search_warning = str(exc)
-
         if progress_callback:
-            progress_callback(
-                0.35 + 0.55 * (idx / max(total, 1)),
-                f"Analyzing evidence and generating report {idx}/{total}...",
+            step_label = (
+                f"Running Gemini preliminary analysis for claim {idx}/{total}..."
+                if verification_mode == VerificationMode.PRELIMINARY_KNOWLEDGE
+                else f"Comparing sources against claim {idx}/{total} with Gemini..."
             )
+            progress_callback(0.35 + 0.55 * ((idx - 1) / max(total, 1)), step_label)
 
         report = generate_verification_report(
             claim,
-            claim_sources,
+            list(manual_sources),
             session_id=session_id,
-            search_mode=search_mode,
+            verification_mode=verification_mode,
+            gemini_service=service,
+            use_gemini=use_gemini,
         )
-        if search_warning:
-            report.limitations.append(f"Search API warning: {search_warning}")
         reports.append(report)
 
     if progress_callback:
         progress_callback(1.0, "Verification complete.")
 
-    return session_id, search_mode, reports
+    return session_id, verification_mode.value, reports
 
 
 def export_report_json(report: VerificationReport) -> str:
@@ -176,10 +206,11 @@ def export_reports_csv(reports: list[VerificationReport]) -> str:
             "session_id",
             "claim",
             "final_label",
+            "verification_mode",
+            "is_preliminary_ai_only",
             "confidence_score",
             "disagreement_flagged",
             "retrieval_timestamp",
-            "search_mode",
             "source_title",
             "publisher",
             "url",
@@ -201,15 +232,16 @@ def export_reports_csv(reports: list[VerificationReport]) -> str:
                     report.session_id,
                     report.claim,
                     report.label.value,
+                    report.verification_mode.value,
+                    report.is_preliminary_ai_only,
                     report.confidence_score,
                     report.disagreement_flagged,
                     report.retrieval_timestamp,
-                    report.search_mode,
                     "",
                     "",
                     "",
                     "",
-                    "No Sources",
+                    "Preliminary AI Only" if report.is_preliminary_ai_only else "No Sources",
                     "Unclear",
                     0.0,
                     "",
@@ -225,10 +257,11 @@ def export_reports_csv(reports: list[VerificationReport]) -> str:
                     report.session_id,
                     report.claim,
                     report.label.value,
+                    report.verification_mode.value,
+                    report.is_preliminary_ai_only,
                     report.confidence_score,
                     report.disagreement_flagged,
                     report.retrieval_timestamp,
-                    report.search_mode,
                     row.source_title,
                     row.publisher,
                     row.url,
@@ -254,69 +287,106 @@ def export_report_markdown(report: VerificationReport) -> str:
     lines: list[str] = [
         f"# Verification Report: `{report.label.value}`",
         "",
-        f"- **Report ID:** `{report.report_id}`",
-        f"- **Session ID:** `{report.session_id}`",
-        f"- **Retrieval Timestamp (UTC):** {report.retrieval_timestamp}",
-        f"- **Discovery Mode:** {report.search_mode}",
-        f"- **Confidence Score:** {report.confidence_score:.2f}",
-        f"- **Disagreement Flagged:** {'Yes' if report.disagreement_flagged else 'No'}",
-        "",
-        "## Original Claim",
-        f"> {report.claim}",
-        "",
-        "## Summary & Confidence Explanation",
-        report.short_explanation,
-        "",
-        f"*{report.confidence_explanation}*",
-        "",
-        "## Supporting Evidence",
     ]
-
-    if report.supporting_evidence:
-        for item in report.supporting_evidence:
-            date_part = f" ({item.publication_date})" if item.publication_date else ""
-            lines.append(
-                f"- **[{item.source_title}]({item.url})** — `{item.publisher}`{date_part} "
-                f"| Relevance: `{item.relevance_score:.2f}`"
-            )
-            lines.append(f"  - Excerpt: \"{item.excerpt}\"")
-            lines.append(f"  - Rationale: {item.rationale}")
-    else:
-        lines.append("- None identified.")
-
-    lines.extend(["", "## Contradicting Evidence"])
-    if report.contradicting_evidence:
-        for item in report.contradicting_evidence:
-            date_part = f" ({item.publication_date})" if item.publication_date else ""
-            lines.append(
-                f"- **[{item.source_title}]({item.url})** — `{item.publisher}`{date_part} "
-                f"| Relevance: `{item.relevance_score:.2f}`"
-            )
-            lines.append(f"  - Excerpt: \"{item.excerpt}\"")
-            lines.append(f"  - Rationale: {item.rationale}")
-    else:
-        lines.append("- None identified.")
-
-    lines.extend(["", "## Multiple-Source Comparison"])
-    if report.source_comparison.rows:
-        lines.append(
-            "| Source Title | Publisher | Publication Date | Position | Retrieval Status | Relevance | URL |"
+    if report.is_preliminary_ai_only:
+        lines.extend(
+            [
+                "> **WARNING — AI-GENERATED PRELIMINARY ANALYSIS:** This report is based solely "
+                "on Gemini model knowledge. No external sources or live webpages were verified.",
+                "",
+            ]
         )
-        lines.append("| --- | --- | --- | --- | --- | --- | --- |")
-        for row in report.source_comparison.rows:
-            safe_title = row.source_title.replace("|", "\\|")
-            pub_date = row.publication_date or "Unavailable"
-            lines.append(
-                f"| {safe_title} | {row.publisher} | {pub_date} | "
-                f"{row.evidence_position.value} | {row.retrieval_status} | "
-                f"{row.relevance_score:.2f} | [Link]({row.url}) |"
-            )
+
+    lines.extend(
+        [
+            f"- **Report ID:** `{report.report_id}`",
+            f"- **Session ID:** `{report.session_id}`",
+            f"- **Verification Mode:** {report.verification_mode.value}",
+            f"- **Retrieval Timestamp (UTC):** {report.retrieval_timestamp}",
+            f"- **Confidence Score:** {report.confidence_score:.2f}",
+            f"- **Disagreement Flagged:** {'Yes' if report.disagreement_flagged else 'No'}",
+            "",
+            "## Original Claim",
+            f"> {report.claim}",
+            "",
+            "## Summary & Confidence Explanation",
+            report.short_explanation,
+            "",
+            f"*{report.confidence_explanation}*",
+            "",
+        ]
+    )
+
+    if report.is_preliminary_ai_only:
+        lines.append("## Preliminary Knowledge Points (Unverified by Live Sources)")
+        lines.append("### Points Supporting Claim")
+        if report.preliminary_points_supporting:
+            for pt in report.preliminary_points_supporting:
+                lines.append(f"- {pt}")
+        else:
+            lines.append("- None noted.")
         lines.append("")
-        lines.append(f"**Agreement:** {report.source_comparison.agreement_summary}")
+        lines.append("### Points Contradicting Claim")
+        if report.preliminary_points_contradicting:
+            for pt in report.preliminary_points_contradicting:
+                lines.append(f"- {pt}")
+        else:
+            lines.append("- None noted.")
         lines.append("")
-        lines.append(f"**Disagreement:** {report.source_comparison.disagreement_summary}")
     else:
-        lines.append("No sources were compared.")
+        lines.append("## Supporting Evidence")
+        if report.supporting_evidence:
+            for item in report.supporting_evidence:
+                date_part = f" ({item.publication_date})" if item.publication_date else ""
+                lines.append(
+                    f"- **[{item.source_title}]({item.url})** — `{item.publisher}`{date_part} "
+                    f"| Relevance: `{item.relevance_score:.2f}`"
+                )
+                lines.append(f"  - Excerpt: \"{item.excerpt}\"")
+                lines.append(f"  - Rationale: {item.rationale}")
+        else:
+            lines.append("- None identified.")
+
+        lines.extend(["", "## Contradicting Evidence"])
+        if report.contradicting_evidence:
+            for item in report.contradicting_evidence:
+                date_part = f" ({item.publication_date})" if item.publication_date else ""
+                lines.append(
+                    f"- **[{item.source_title}]({item.url})** — `{item.publisher}`{date_part} "
+                    f"| Relevance: `{item.relevance_score:.2f}`"
+                )
+                lines.append(f"  - Excerpt: \"{item.excerpt}\"")
+                lines.append(f"  - Rationale: {item.rationale}")
+        else:
+            lines.append("- None identified.")
+
+        lines.extend(["", "## Multiple-Source Comparison"])
+        if report.source_comparison.rows:
+            lines.append(
+                "| Source Title | Publisher | Publication Date | Position | Retrieval Status | Relevance | URL |"
+            )
+            lines.append("| --- | --- | --- | --- | --- | --- | --- |")
+            for row in report.source_comparison.rows:
+                safe_title = row.source_title.replace("|", "\\|")
+                pub_date = row.publication_date or "Unavailable"
+                lines.append(
+                    f"| {safe_title} | {row.publisher} | {pub_date} | "
+                    f"{row.evidence_position.value} | {row.retrieval_status} | "
+                    f"{row.relevance_score:.2f} | [Link]({row.url}) |"
+                )
+            lines.append("")
+            lines.append(f"**Agreement:** {report.source_comparison.agreement_summary}")
+            lines.append("")
+            lines.append(f"**Disagreement:** {report.source_comparison.disagreement_summary}")
+        else:
+            lines.append("No sources were compared.")
+
+    lines.extend(["", "## Unsupported or Unverified Statements"])
+    if report.unsupported_statements:
+        for stmt in report.unsupported_statements:
+            lines.append(f"- {stmt}")
+    else:
+        lines.append("- None highlighted.")
 
     lines.extend(["", "## Unresolved Questions"])
     if report.unresolved_questions:
